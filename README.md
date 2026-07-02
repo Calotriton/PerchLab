@@ -134,18 +134,49 @@ uv pip install -e ".[onnx]"     # ONNX runtime — light, good default (CPU or m
 
 ### 2.6 GPU TensorFlow (optional)
 
-For CUDA acceleration, install the `gpu` extra and follow the official
-[TensorFlow GPU guide](https://www.tensorflow.org/install/pip) to match CUDA/cuDNN
-versions. On small GPUs, keep `model.batch_size` modest (see
-[`configs/default.yaml`](configs/default.yaml)); the ONNX backend is a safe
-fallback.
+For CUDA acceleration install the `gpu` extra (`uv pip install -e ".[gpu]"`),
+which pulls `tensorflow[and-cuda] ~=2.20` and the bundled CUDA/cuDNN wheels. Then
+**select the GPU backend explicitly** — the default `auto` backend resolves to
+the CPU build:
+
+```bash
+export PERCHLAB_MODEL__BACKEND=gpu   # or set model.backend: gpu in a config file
+```
+
+PerchLab automatically puts the bundled CUDA libraries on `LD_LIBRARY_PATH`
+(re-execing once at startup), so GPU works out of the box under WSL2 — no manual
+`LD_LIBRARY_PATH` export is needed. On small GPUs (e.g. a 4 GB laptop card) keep
+`model.batch_size` modest; if you hit out-of-memory errors, fall back to
+`PERCHLAB_MODEL__BACKEND=cpu` (still TensorFlow) or the ONNX backend. See the
+official [TensorFlow GPU guide](https://www.tensorflow.org/install/pip) for
+driver/CUDA background.
 
 ### 2.7 Kaggle credentials (first model download)
 
-Perch V2 is downloaded from Kaggle on first use via `kagglehub`. Create a Kaggle
-API token (Kaggle → *Settings* → *Create New Token*) and place `kaggle.json` at
-`~/.kaggle/kaggle.json`, or export `KAGGLE_USERNAME` / `KAGGLE_KEY`. The model is
-cached locally afterwards.
+Perch V2 is downloaded from Kaggle on first use via `kagglehub`. Kaggle offers
+two credential styles:
+
+- **New access token (recommended)** — Kaggle → *Settings* → *API* → *Create New
+  Token* gives a `KGAT_…` token. Export it:
+  ```bash
+  export KAGGLE_API_TOKEN=KGAT_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  ```
+  These tokens require `kagglehub >= 1.0`; PerchLab enforces this with a uv
+  dependency override (perch-hoplite's own pin is older), so a normal install
+  already has a compatible version.
+- **Classic token** — a downloaded `kaggle.json` placed at `~/.kaggle/kaggle.json`
+  (or `KAGGLE_USERNAME` + `KAGGLE_KEY`) also works.
+
+Accept the model's terms once on the
+[model page](https://www.kaggle.com/models/google/bird-vocalization-classifier).
+The model is cached under `~/.cache/kagglehub` afterwards.
+
+> **Tip.** To persist settings across shells, add the exports to `~/.bashrc`:
+> ```bash
+> export KAGGLE_API_TOKEN=KGAT_...        # your token
+> export PERCHLAB_MODEL__BACKEND=gpu      # if using the GPU build
+> ```
+> Treat the token as a secret; rotate it in Kaggle settings if it is ever exposed.
 
 ---
 

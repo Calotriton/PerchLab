@@ -60,6 +60,13 @@ dev = [
 Homepage = "https://github.com/Calotriton/PerchLab"
 Repository = "https://github.com/Calotriton/PerchLab"
 
+[tool.uv]
+# perch-hoplite pins kagglehub<0.4, but that version cannot use Kaggle's newer
+# KGAT access tokens. kagglehub only exposes model_download() to perch-hoplite,
+# which is unchanged in 1.x, so overriding the pin is safe and lets modern
+# Kaggle tokens authenticate.
+override-dependencies = ["kagglehub>=1.0,<2.0"]
+
 [project.scripts]
 perchlab = "perchlab.cli:app"
 

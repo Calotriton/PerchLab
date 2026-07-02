@@ -8,15 +8,20 @@ for scripting. Both paths build an :class:`AppConfig` and dispatch to the same
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from ._bootstrap import ensure_cuda_library_path
 
-import typer
+# Must run before TensorFlow is ever imported (see _bootstrap docstring).
+ensure_cuda_library_path()
 
-from .config import load_config
-from .errors import PerchLabError
-from .logging import configure_logging, get_logger
-from .workflows import all_workflows, get_workflow
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
+
+import typer  # noqa: E402
+
+from .config import load_config  # noqa: E402
+from .errors import PerchLabError  # noqa: E402
+from .logging import configure_logging, get_logger  # noqa: E402
+from .workflows import all_workflows, get_workflow  # noqa: E402
 
 app = typer.Typer(
     add_completion=False,
