@@ -1,0 +1,67 @@
+# PerchLab default configuration.
+#
+# Every value here mirrors the defaults in perchlab.config. Copy this file,
+# edit what you need, and pass it with `--config path/to/run.yaml`. CLI flags
+# override these; environment variables (PERCHLAB_SECTION__KEY) sit in between.
+
+seed: 0
+log_level: INFO
+log_file: null
+
+model:
+  name: PERCH_V2
+  backend: auto        # auto | cpu | gpu | onnx
+  embedding_dim: 1536
+  sample_rate_hz: 32000
+  batch_size: 16
+
+preprocess:
+  target_sample_rate_hz: 32000
+  mono: true
+  peak_norm: null
+  min_length_s: 5.0
+  chunk_length_s: 600.0
+
+filename:
+  # Named groups device/date/time. Default matches PIC02_20250530_040000.wav.
+  pattern: '(?P<device>[A-Za-z0-9]+)_(?P<date>\d{8})_(?P<time>\d{6})'
+  date_format: '%Y%m%d'
+  time_format: '%H%M%S'
+
+identify:
+  window_s: 5.0
+  hop_s: 5.0
+  top_k: 3
+  threshold: 0.6
+  formats: [csv, raven]
+  sweep:
+    enabled: false
+    start: 0.1
+    end: 1.0
+    step: 0.1
+  segments:
+    enabled: false
+    output_dir: null
+    bin_width: 0.1
+    max_per_bin: 20
+    clip_duration_s: 5.0
+    seed: null
+
+embed:
+  window_s: 5.0
+  hop_s: 5.0
+  embedding_dim: 1536
+  labeled: false
+  export: none        # none | parquet | npz
+
+benchmark:
+  window_s: 5.0
+  hop_s: 5.0
+  threshold: 0.6
+  aggregate: window   # window | file
+  mode: classification
+  sweep:
+    enabled: false
+    start: 0.0
+    end: 1.0
+    step: 0.1

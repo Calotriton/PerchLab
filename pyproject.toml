@@ -1,0 +1,103 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "perchlab"
+version = "0.1.0"
+description = "Identify species, generate embeddings, and benchmark Google Perch V2 with Perch Hoplite."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Calotriton" }]
+keywords = ["bioacoustics", "perch", "birdnet", "embeddings", "audio", "ecology"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    # Core scientific model + storage stack (pulls numpy, pandas, librosa,
+    # scipy, matplotlib, kagglehub, usearch as transitive deps).
+    "perch-hoplite>=1.0.2,<2.0",
+    # CLI + interactive prompts.
+    "typer>=0.12",
+    "questionary>=2.0",
+    "rich>=13.7",
+    # Configuration.
+    "pydantic>=2.6",
+    "pyyaml>=6.0",
+    # Data IO / metrics.
+    "pandas>=2.1",
+    "pyarrow>=15.0",
+    "numpy>=2.0",
+    "soundfile>=0.12",
+    "scikit-learn>=1.4",
+    "matplotlib>=3.6",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Perch V2 inference backends. Pick one that matches the host:
+#   onnx    -> onnxruntime (light; good default, works on CPU and modest GPUs)
+#   tf      -> TensorFlow CPU
+#   gpu     -> TensorFlow with CUDA
+onnx = ["perch-hoplite[onnx]>=1.0.2,<2.0"]
+tf = ["perch-hoplite[tf]>=1.0.2,<2.0"]
+gpu = ["perch-hoplite[tf-cuda]>=1.0.2,<2.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+    "types-PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Calotriton/PerchLab"
+Repository = "https://github.com/Calotriton/PerchLab"
+
+[project.scripts]
+perchlab = "perchlab.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/perchlab"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "D"]
+ignore = [
+    "D203",  # one-blank-line-before-class (conflicts with D211)
+    "D213",  # multi-line-summary-second-line (conflicts with D212)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]        # tests need no docstrings
+"notebooks/*" = ["D"]
+"src/perchlab/cli.py" = ["B008"]  # typer.Option() in defaults is the idiom
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["perchlab"]
+strict = false
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -m 'not slow'"
+markers = [
+    "slow: tests that download or run the real Perch V2 model",
+]

@@ -1,0 +1,17 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "PerchLab: Run",
+      "type": "shell",
+      "command": "uv run perchlab",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "focus": true
+      },
+      "detail": "Launch the PerchLab interactive CLI (uv run perchlab)."
+    }
+  ]
+}

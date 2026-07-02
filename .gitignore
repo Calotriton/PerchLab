@@ -1,2 +1,31 @@
-# Ignore data files and directories
+# Data files and directories
 /data/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# PerchLab run outputs
+perchlab_ID_*/
+embeddings_*/
+benchmark_*/
+*.sqlite
+
+# OS / editor
+.DS_Store
+*.swp

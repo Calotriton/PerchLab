@@ -1,1 +1,365 @@
 # PerchLab
+
+**PerchLab** identifies species from audio recordings, generates embeddings, and
+benchmarks Google's **Perch V2** model — built on top of
+[Perch Hoplite](https://github.com/google-research/perch-hoplite). It is a clean,
+modular, extensible command-line tool designed to be shared with other
+researchers and to slot into existing bioacoustics workflows (its detection
+tables are drop-in compatible with Raven/BirdNET selection tables).
+
+- **Species Identification** — Perch V2's built-in classifier, top-k per window, confidence threshold, optional clip extraction.
+- **Embedding Generation** — store embeddings in a Perch Hoplite SQLite database (optionally exported to Parquet/NPZ).
+- **Benchmark** — evaluate Perch on a labelled dataset with accuracy, precision/recall/F1, confusion matrices, ROC/PR curves and AUCs, and a full scikit-learn classification report.
+
+---
+
+## Table of contents
+
+1. [Introduction](#1-introduction)
+2. [Installation](#2-installation)
+3. [Usage](#3-usage)
+4. [Concepts](#4-concepts)
+5. [Benchmark](#5-benchmark)
+6. [Project structure](#6-project-structure)
+7. [Scientific background](#7-scientific-background)
+8. [References](#8-references)
+
+---
+
+## 1. Introduction
+
+### Perch V2
+
+**Perch** is a bioacoustics model from Google trained to classify ~15,000
+species (of which ~10,000 are birds) and to produce general-purpose audio
+**embeddings**. Perch 2.0 improves embedding and prediction quality over the
+original and adds support for many non-avian taxa. It achieves state-of-the-art
+results on bioacoustics benchmarks such as BirdSet and BEANS.
+
+**Input contract.** Perch V2 consumes **5-second windows** of **mono, 32 kHz,
+float32** waveform samples. It outputs, per window:
+
+- a **1536-dimensional embedding**, and
+- **logits** over its ~15k classes (iNaturalist taxonomy).
+
+### Perch Hoplite
+
+[Perch Hoplite](https://github.com/google-research/perch-hoplite) is Google's
+system for storing large volumes of machine-perception embeddings and combining
+vector search with active learning. PerchLab reuses Hoplite for model loading
+(`zoo`), audio IO, the embedding database (`db`), and evaluation metrics rather
+than reimplementing them.
+
+### Model architecture, embeddings, and transfer learning
+
+Perch is a deep audio classifier trained on a very large, taxonomically diverse
+corpus. Its penultimate layer produces **embeddings** — dense vectors that
+summarise the acoustic content of a window. Because these embeddings were trained
+to be **linearly separable**, a simple linear classifier on top of them transfers
+remarkably well to *new* tasks with little data. This is **transfer learning**:
+reuse a model trained on a broad task (global birdsong) as a feature extractor for
+a narrow one (your local species, individual ID, call types).
+
+### Softmax vs. sigmoid, and the inference workflow
+
+Perch is **multi-label** (several species can vocalise in one window), so each
+class logit is converted to an independent probability with the **logistic
+sigmoid** (`confidence = 1 / (1 + e^-logit)`), *not* a softmax (which would force
+the class probabilities to sum to 1). PerchLab's inference workflow is:
+
+```
+audio file → preprocess (mono/32 kHz/float32) → frame into windows
+           → Perch V2 forward pass (embeddings + logits)
+           → sigmoid → top-k per window → confidence threshold → outputs
+```
+
+Inference is run **once** per file; the confidence threshold is a cheap
+post-processing filter (so a whole multi-threshold sweep needs only one pass).
+
+---
+
+## 2. Installation
+
+PerchLab runs on **Linux** and on **Windows via WSL**. Python **3.11** is
+required (TensorFlow/Perch Hoplite do not yet support 3.14+).
+
+### 2.1 Install WSL (Windows users)
+
+In an elevated PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Reboot if prompted, then launch **Ubuntu** from the Start menu and create your
+Linux user. All remaining steps run *inside* the WSL Ubuntu shell.
+
+### 2.2 System dependencies
+
+Perch Hoplite needs `libsndfile` and `ffmpeg` for audio decoding:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libsndfile1 ffmpeg
+```
+
+### 2.3 Configure VS Code (optional but recommended)
+
+Install [VS Code](https://code.visualstudio.com/) and the **WSL** and **Python**
+extensions. Open the project in WSL with **"WSL: Connect to WSL"**
+(`Ctrl+Shift+P`), then **File → Open Folder → PerchLab**. A ready-made task
+(**Terminal → Run Task → "PerchLab: Run"**) launches `uv run perchlab`.
+
+### 2.4 Install uv
+
+[`uv`](https://docs.astral.sh/uv/) manages the environment and dependencies:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 2.5 Clone, create the environment, install
+
+```bash
+git clone https://github.com/Calotriton/PerchLab.git
+cd PerchLab
+uv venv --python 3.11
+source .venv/bin/activate
+# Choose an inference backend extra:
+uv pip install -e ".[onnx]"     # ONNX runtime — light, good default (CPU or modest GPU)
+# uv pip install -e ".[tf]"     # TensorFlow (CPU)
+# uv pip install -e ".[gpu]"    # TensorFlow with CUDA
+# add ,dev for the test/lint toolchain, e.g. ".[onnx,dev]"
+```
+
+### 2.6 GPU TensorFlow (optional)
+
+For CUDA acceleration, install the `gpu` extra and follow the official
+[TensorFlow GPU guide](https://www.tensorflow.org/install/pip) to match CUDA/cuDNN
+versions. On small GPUs, keep `model.batch_size` modest (see
+[`configs/default.yaml`](configs/default.yaml)); the ONNX backend is a safe
+fallback.
+
+### 2.7 Kaggle credentials (first model download)
+
+Perch V2 is downloaded from Kaggle on first use via `kagglehub`. Create a Kaggle
+API token (Kaggle → *Settings* → *Create New Token*) and place `kaggle.json` at
+`~/.kaggle/kaggle.json`, or export `KAGGLE_USERNAME` / `KAGGLE_KEY`. The model is
+cached locally afterwards.
+
+---
+
+## 3. Usage
+
+### 3.1 Interactive mode
+
+```bash
+uv run perchlab
+```
+
+You are shown a menu:
+
+```
+Select a workflow:
+  1) Species Identification
+  2) Embedding Generation
+  3) Benchmark
+```
+
+Pick one and PerchLab prompts for each parameter (input folder with path
+autocompletion, output folder, window/hop, top-k, threshold, …). Defaults come
+from the central configuration, so pressing Enter accepts them.
+
+### 3.2 Command-line mode (scripting)
+
+The same workflows run non-interactively:
+
+```bash
+# Species identification
+uv run perchlab id \
+    --input recordings \
+    --output perchID \
+    --window 5 --hop 5 \
+    --top-k 3 \
+    --threshold 0.6 \
+    --format csv,raven
+
+# Multi-threshold sweep + clip extraction
+uv run perchlab id --input recordings --output perchID \
+    --threshold-start 0.1 --threshold-end 1.0 --threshold-step 0.1 \
+    --extract --max-per-bin 20 --clip-duration 5 --extract-seed 0
+
+# Embedding generation (labelled: one folder per species)
+uv run perchlab embed --input clips --output embeddings --labeled --export parquet
+
+# Benchmark on a labelled dataset
+uv run perchlab benchmark --input labelled_dataset --output report \
+    --threshold-start 0.0 --threshold-end 1.0 --threshold-step 0.1
+```
+
+Any command also accepts `--config run.yaml` for reproducible batch runs; CLI
+flags override the YAML, which overrides environment variables
+(`PERCHLAB_MODEL__BACKEND=onnx`), which override the built-in defaults.
+
+### 3.3 Interpreting outputs
+
+- **Identification** writes, under `threshold_<value>/`: one CSV per recording, a
+  matching `.selection.table.txt` (Raven), an `all_detections.csv` aggregate, a
+  `summary.txt` of per-species counts, and (if enabled) `segments/` with clips in
+  per-species subfolders. A `manifest.json` records the exact run.
+- **Embedding** writes a Hoplite database under `hoplite_db/` (plus an optional
+  `embeddings.parquet`/`.npz`).
+- **Benchmark** writes `metrics.json`, `metrics.csv`, `classification_report.txt`,
+  `confusion_matrix.csv`, `sweep.csv`, four PNG figures, and a human-readable
+  `report.md`.
+
+---
+
+## 4. Concepts
+
+| Concept | Meaning |
+| --- | --- |
+| **Window size** | Length of audio analysed at once. Perch V2 is trained on **5 s**; other values are padded/truncated to the model window and deviate from training. |
+| **Hop size** | Stride between consecutive windows. `hop < window` produces overlapping windows; `hop = window` (default 5 s) is non-overlapping. |
+| **Top-k** | How many highest-ranked species are kept per window (default 3). Selection happens **before** thresholding. |
+| **Confidence threshold** | Minimum confidence (`[0,1]`) to keep a prediction. A pure **post-processing** filter — it never changes inference or predictions, only which are reported. |
+| **Embedding** | The 1536-d vector Perch produces per window; the reusable, task-agnostic representation. |
+
+### CSV output fields (identification)
+
+Each row is one predicted species in one window (empty windows produce no rows;
+multiple species in a window produce multiple rows).
+
+| Column | Description |
+| --- | --- |
+| `date` | Recording start date parsed from the filename (`YYYY-MM-DD`). |
+| `hour` | Recording start clock time parsed from the filename (`HH:MM:SS`). |
+| `timestamp` | Offset of the window **within** the recording (`H:MM:SS`). |
+| `window_size` | Analysis window length used, in seconds. |
+| `hop_size` | Hop length used, in seconds. |
+| `start` | Window start time within the recording, in seconds. |
+| `end` | Window end time within the recording, in seconds. |
+| `time` | Wall-clock time of the event = recording start + `timestamp`. |
+| `top_k` | Rank of this prediction within its window (1 = most confident). |
+| `expected_label` | Parent-folder label, when recordings are organised by species. |
+| `label` | Predicted Perch label (scientific name). |
+| `threshold` | Confidence threshold this file was produced under. |
+| `confidence` | Prediction confidence in `[0, 1]` (sigmoid of the logit). |
+| `file` | Path to the source audio file. |
+
+### Benchmark metrics
+
+Accuracy, precision, recall, F1 (per class + macro/micro), confusion matrix,
+ROC curves + ROC-AUC, precision–recall curves + PR-AUC, and scikit-learn's
+`classification_report`. See below.
+
+---
+
+## 5. Benchmark
+
+**Methodology.** The benchmark evaluates Perch's **top-1** prediction against a
+ground-truth label. It expects a **labelled dataset**: a folder named after a
+species, or a folder containing one subfolder per species.
+
+**Assumptions.** Every audio file inherits its **parent folder name** as its
+ground-truth label. Evaluation is per **window** by default (each window is a
+sample); use `--aggregate file` to mean-pool a file's windows into one sample —
+appropriate for long recordings, whereas per-window suits short one-event clips
+(such as those extracted by the identification workflow).
+
+**Evaluation metrics.**
+- **Top-1 accuracy** — fraction of windows whose top prediction (above threshold) matches the folder label.
+- **Precision / recall / F1** — per class and macro/micro averaged.
+- **Confusion matrix** — over the dataset's species.
+- **ROC + ROC-AUC** and **PR + PR-AUC** — per class, one-vs-rest, using the continuous confidence of each class (threshold-independent).
+- **`classification_report`** — produced on every run.
+- A **threshold sweep** yields the accuracy/precision/recall/F1-vs-threshold curves.
+
+**Interpretation.** High macro F1 with high per-class ROC-AUC indicates Perch
+separates your species well. The metric-vs-threshold plot helps choose an
+operating threshold. PR curves are more informative than ROC when classes are
+imbalanced.
+
+**Limitations.** Perch confidences are **uncalibrated** sigmoids and are *not*
+directly comparable across species, so a single global threshold means different
+things per class — treat thresholds as relative. Folder labels must match Perch's
+class names (scientific names) to score as positives; non-matching labels still
+appear in the confusion matrix but yield degenerate ROC/PR. Windows of silence in
+a species-labelled file are still counted as that species, which can depress
+apparent accuracy for long recordings (prefer `--aggregate file` or short clips).
+
+---
+
+## 6. Project structure
+
+```
+src/perchlab/
+  config.py         Central, typed configuration (pydantic) + YAML/env loading.
+  logging.py        Structured logging (rich); no bare print().
+  errors.py         Exception hierarchy (recoverable AudioError, etc.).
+  models.py         PerchModel: thin wrapper over the Hoplite zoo.
+  preprocess.py     Perch input contract: mono/32 kHz/float32/validate + windowing.
+  audio.py          File discovery + configurable filename->datetime parsing.
+  inference.py      InferenceEngine: batch windows -> per-window embeddings/logits.
+  classify.py       Top-k over logits (cached) + threshold filtering -> detections.
+  detections.py     The Detection record and its CSV columns.
+  taxonomy.py       Class-name <-> display/code mapping (extension seam).
+  segments.py       Confidence-binned clip extraction into per-species folders.
+  embedding.py      EmbeddingRunner: write embeddings/labels to a Hoplite DB.
+  prompts.py        Interactive prompt helpers (path autocompletion, etc.).
+  util.py           Determinism (seeding) and run manifests.
+  cli.py            Typer CLI: interactive menu + id/embed/benchmark subcommands.
+  workflows/        Workflow registry + the three workflows.
+  io/               Raven selection tables + CSV/Parquet writers.
+  benchmark/        Labelled-dataset eval: dataset/evaluate/metrics/sweep/plots/report.
+configs/default.yaml  Documented default configuration.
+notebooks/            Example notebooks mirroring the workflows.
+tests/                pytest suite (offline PlaceholderModel + real-model marker).
+```
+
+### Why Perch requires mono / 32 kHz / float32 / normalization
+
+Perch V2 was trained on a fixed input representation, and inference must match it:
+
+- **Mono** — the model has a single input channel; stereo is reduced to one channel.
+- **32 kHz** — the sample rate the spectrogram front-end expects; resampling keeps the frequency content aligned with training.
+- **float32** — the numeric type the network operates on; integer PCM is converted to floating point.
+- **Normalization** — each window is peak-normalized so loud and quiet recordings are treated consistently. PerchLab **reuses Perch Hoplite's own per-window normalization** (`EmbeddingModel.normalize_audio`) rather than reimplementing it; PerchLab's preprocessing focuses on mono/32 kHz/float32 conversion and validation. See [`perch_hoplite/zoo/taxonomy_model_tf.py`](https://github.com/google-research/perch-hoplite/blob/main/perch_hoplite/zoo/taxonomy_model_tf.py).
+
+---
+
+## 7. Scientific background
+
+Perch matters for bioacoustics because a single, broadly-trained model provides a
+strong foundation for many downstream tasks:
+
+- **Transfer learning** — its linearly-separable embeddings let researchers build accurate classifiers for new signals from very little labelled data.
+- **Species recognition** — state-of-the-art avian soundscape classification across thousands of species.
+- **Call-type recognition** — embeddings capture within-species vocalisation structure, enabling call-type classifiers.
+- **Dialect detection** — regional vocal variation is separable in embedding space.
+- **General bioacoustic representation learning** — the same embeddings support individual identification (e.g. dogs, bats), event detection in coral reefs, and marine mammal tasks, making Perch a general feature extractor for ecology and conservation monitoring.
+
+---
+
+## 8. References
+
+- **Perch Hoplite** — https://github.com/google-research/perch-hoplite
+- **Perch V2 (Kaggle)** — https://www.kaggle.com/models/google/bird-vocalization-classifier/tensorFlow2/perch_v2/2
+- **Perch 2.0 paper** — *Perch 2.0: The Bittern Lesson for Bioacoustics* — https://research.google/pubs/perch-20-the-bittern-lesson-for-bioacoustics/
+- **TensorFlow GPU install** — https://www.tensorflow.org/install/pip
+
+---
+
+## Development
+
+```bash
+uv pip install -e ".[onnx,dev]"
+uv run pytest          # fast suite uses an offline placeholder model
+uv run pytest -m slow  # runs the real Perch V2 model (needs Kaggle credentials)
+ruff check src tests
+mypy src/perchlab
+```
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
