@@ -66,6 +66,11 @@ Repository = "https://github.com/Calotriton/PerchLab"
 # which is unchanged in 1.x, so overriding the pin is safe and lets modern
 # Kaggle tokens authenticate.
 override-dependencies = ["kagglehub>=1.0,<2.0"]
+# librosa (via perch-hoplite) requires `numba` with no lower bound, and uv's
+# universal resolution otherwise degrades to numba 0.53.1 — an sdist that only
+# builds on Python <3.10, breaking `uv sync`. Floor it at 0.60 (the first numba
+# with numpy 2.x support, which this project requires anyway).
+constraint-dependencies = ["numba>=0.60"]
 
 [project.scripts]
 perchlab = "perchlab.cli:app"

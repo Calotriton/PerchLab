@@ -16,7 +16,7 @@ from ..errors import WorkflowError
 from ..inference import InferenceEngine
 from ..logging import get_logger
 from ..preprocess import AudioPreprocessor
-from ..util import set_global_seed, timestamp_slug, write_manifest
+from ..util import default_output_dir, set_global_seed, write_manifest
 from .base import RunSummary, Workflow
 
 _log = get_logger("workflow.benchmark")
@@ -41,7 +41,7 @@ class BenchmarkWorkflow(Workflow):
         _log.info(_INFO_MESSAGE)
         cfg = config.benchmark
         cfg.input_dir = prompts.ask_path("Labelled dataset folder:", must_exist=True)
-        default_out = f"benchmark_{timestamp_slug()}"
+        default_out = str(default_output_dir("benchmark"))
         cfg.output_dir = prompts.ask_path("Output folder:", default=default_out, must_exist=False)
         cfg.window_s = prompts.ask_float("Window size (s):", default=cfg.window_s)
         cfg.hop_s = prompts.ask_float("Hop size (s):", default=cfg.hop_s)
@@ -65,7 +65,7 @@ class BenchmarkWorkflow(Workflow):
         if cfg.input_dir is None:
             raise WorkflowError("No input folder configured.")
         _log.info(_INFO_MESSAGE)
-        output_dir = Path(cfg.output_dir or f"benchmark_{timestamp_slug()}")
+        output_dir = Path(cfg.output_dir or default_output_dir("benchmark"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         thresholds = cfg.sweep.values() if cfg.sweep.enabled else [cfg.threshold]
@@ -96,7 +96,9 @@ class BenchmarkWorkflow(Workflow):
         )
 
         _log.info("Running inference over %d files ...", len(files))
-        data = evaluate.evaluate_dataset(files, model, engine, aggregate=cfg.aggregate)
+        data = evaluate.evaluate_dataset(
+            files, model, engine, aggregate=cfg.aggregate, activation=config.model.activation
+        )
         if not data.y_true:
             raise WorkflowError("No windows were evaluated; check the dataset and labels.")
 

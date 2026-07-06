@@ -24,7 +24,7 @@ from ..logging import console, get_logger
 from ..preprocess import AudioPreprocessor
 from ..segments import extract_segments
 from ..taxonomy import TaxonomyMap
-from ..util import set_global_seed, timestamp_slug, write_manifest
+from ..util import default_output_dir, set_global_seed, write_manifest
 from .base import RunSummary, Workflow
 
 _log = get_logger("workflow.identify")
@@ -43,20 +43,21 @@ class SpeciesIdentificationWorkflow(Workflow):
 
         cfg = config.identify
         cfg.input_dir = prompts.ask_path("Input folder (recordings):", must_exist=True)
-        default_out = f"perchlab_ID_{timestamp_slug()}"
+        default_out = str(default_output_dir("perchlab_ID"))
         cfg.output_dir = prompts.ask_path(
             "Output folder:", default=default_out, must_exist=False
         )
         cfg.window_s = prompts.ask_float("Window size (s):", default=cfg.window_s)
         cfg.hop_s = prompts.ask_float("Hop size (s):", default=cfg.hop_s)
         cfg.top_k = prompts.ask_int("Top-k (predictions per window):", default=cfg.top_k)
-        cfg.threshold = prompts.ask_float("Confidence threshold:", default=cfg.threshold)
 
         if prompts.ask_bool("Run multiple confidence thresholds?", default=False):
             cfg.sweep.enabled = True
             cfg.sweep.start = prompts.ask_float("  Initial threshold:", default=cfg.threshold)
             cfg.sweep.end = prompts.ask_float("  Final threshold:", default=1.0)
             cfg.sweep.step = prompts.ask_float("  Threshold step:", default=0.1)
+        else:
+            cfg.threshold = prompts.ask_float("Confidence threshold:", default=cfg.threshold)
 
         if prompts.ask_bool("Extract audio segments?", default=False):
             cfg.segments.enabled = True
@@ -73,7 +74,7 @@ class SpeciesIdentificationWorkflow(Workflow):
         cfg = config.identify
         if cfg.input_dir is None:
             raise WorkflowError("No input folder configured.")
-        output_dir = Path(cfg.output_dir or f"perchlab_ID_{timestamp_slug()}")
+        output_dir = Path(cfg.output_dir or default_output_dir("perchlab_ID"))
         output_dir.mkdir(parents=True, exist_ok=True)
 
         thresholds = cfg.sweep.values() if cfg.sweep.enabled else [cfg.threshold]
@@ -104,7 +105,9 @@ class SpeciesIdentificationWorkflow(Workflow):
             hop_s=cfg.hop_s,
             batch_size=config.model.batch_size,
         )
-        runner = ClassifierRunner(TaxonomyMap(model.class_names), top_k=cfg.top_k)
+        runner = ClassifierRunner(
+            TaxonomyMap(model.class_names), top_k=cfg.top_k, activation=config.model.activation
+        )
 
         summary = RunSummary(workflow=self.name)
         thr_dirs = {t: output_dir / f"threshold_{t:.2f}" for t in thresholds}
@@ -189,7 +192,10 @@ class SpeciesIdentificationWorkflow(Workflow):
     ) -> None:
         """Build the aggregate table, species summary, and optional clips."""
         csvs = sorted(p for p in thr_dir.glob("*.csv") if p.name != "all_detections.csv")
-        frames = [pd.read_csv(p) for p in csvs if is_completed(p)]
+        # Drop empty (header-only) per-file CSVs before concat: at higher
+        # thresholds many files have no detections, and concatenating empty
+        # frames triggers a pandas dtype FutureWarning and contributes no rows.
+        frames = [df for df in (pd.read_csv(p) for p in csvs if is_completed(p)) if not df.empty]
         aggregate = (
             pd.concat(frames, ignore_index=True)
             if frames

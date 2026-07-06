@@ -10,7 +10,7 @@ import pytest
 import soundfile as sf
 
 from perchlab.audio import discover_audio, parse_filename
-from perchlab.classify import ClassifierRunner, sigmoid
+from perchlab.classify import ClassifierRunner, sigmoid, softmax
 from perchlab.config import FilenameConfig, PreprocessConfig
 from perchlab.detections import CSV_COLUMNS
 from perchlab.inference import WindowResult
@@ -73,10 +73,29 @@ def test_sigmoid_bounds() -> None:
     assert np.isclose(out[0], 0.0) and np.isclose(out[1], 0.5) and np.isclose(out[2], 1.0)
 
 
-def test_classifier_topk_and_threshold() -> None:
-    # Three classes; logits chosen so confidences are ~ [0.5, 0.88, 0.27].
+def test_softmax_normalises_and_desaturates() -> None:
+    # Large competing logits: softmax normalises and keeps the winner < 1.0,
+    # where sigmoid would saturate all of them to ~1.0.
+    out = softmax(np.array([10.0, 8.0, 9.0], dtype=np.float32))
+    assert np.isclose(out.sum(), 1.0)
+    assert int(np.argmax(out)) == 0 and out[0] < 0.9
+
+
+def test_classifier_default_activation_is_softmax() -> None:
     taxonomy = TaxonomyMap(["sp_a", "sp_b", "sp_c"])
-    runner = ClassifierRunner(taxonomy, top_k=2)
+    runner = ClassifierRunner(taxonomy, top_k=3)  # default activation
+    results = [
+        WindowResult(0.0, 5.0, np.zeros(4, np.float32), np.array([0.0, 2.0, -1.0], np.float32))
+    ]
+    ranked = runner.predict_windows(results)[0].ranked
+    assert [r.class_index for r in ranked] == [1, 0, 2]  # ranked by confidence
+    assert np.isclose(sum(r.confidence for r in ranked), 1.0)  # softmax normalises
+
+
+def test_classifier_topk_and_threshold() -> None:
+    # Sigmoid activation; logits chosen so confidences are ~ [0.5, 0.88, 0.27].
+    taxonomy = TaxonomyMap(["sp_a", "sp_b", "sp_c"])
+    runner = ClassifierRunner(taxonomy, top_k=2, activation="sigmoid")
     results = [
         WindowResult(
             start_s=0.0,

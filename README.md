@@ -62,19 +62,31 @@ a narrow one (your local species, individual ID, call types).
 
 ### Softmax vs. sigmoid, and the inference workflow
 
-Perch is **multi-label** (several species can vocalise in one window), so each
-class logit is converted to an independent probability with the **logistic
-sigmoid** (`confidence = 1 / (1 + e^-logit)`), *not* a softmax (which would force
-the class probabilities to sum to 1). PerchLab's inference workflow is:
+Perch V2's species-classifier head is trained with a **softmax** activation and
+cross-entropy loss (per the Perch V2 paper, which found this trains faster than
+the sigmoid binary cross-entropy usually used for multi-label problems). So
+PerchLab converts logits to confidence with a **softmax over classes** by default
+— this matches the model's training objective and recovers the probabilities it
+was optimised to produce. Classes compete for a shared unit of probability mass,
+so when several species co-occur in a window the mass splits between them (e.g.
+three co-singing *Acrocephalus* each land near 0.3 rather than all reading ~1.0).
+
+A per-class **sigmoid** (`1 / (1 + e^-logit)`, independent probability per class)
+is still selectable via `model.activation: sigmoid`, but it is **not recommended
+for Perch V2**: the model's raw logits are large (winning logits ≈ +10), so
+sigmoid saturates almost every top prediction to ~1.0 and makes the confidence
+threshold ineffective. PerchLab's inference workflow is:
 
 ```
 audio file → preprocess (mono/32 kHz/float32) → frame into windows
            → Perch V2 forward pass (embeddings + logits)
-           → sigmoid → top-k per window → confidence threshold → outputs
+           → softmax → top-k per window → confidence threshold → outputs
 ```
 
 Inference is run **once** per file; the confidence threshold is a cheap
 post-processing filter (so a whole multi-threshold sweep needs only one pass).
+Because softmax scores are lower than saturated sigmoids, the default threshold
+is **0.1** — high enough to drop noise, low enough to keep co-occurring species.
 
 ---
 
@@ -132,6 +144,16 @@ uv pip install -e ".[onnx]"     # ONNX runtime — light, good default (CPU or m
 # add ,dev for the test/lint toolchain, e.g. ".[onnx,dev]"
 ```
 
+> **If you use `uv sync` instead, pass your extras.** The commands above use
+> `uv pip install`, which *adds* to the environment. `uv sync` makes the
+> environment **exactly** match the lockfile, so a bare `uv sync` **uninstalls
+> TensorFlow and the dev tools** — they live in optional groups (`gpu`/`tf`/
+> `onnx`, `dev`), not the core runtime. Always name the extras you need:
+>
+> ```bash
+> uv sync --extra gpu --extra dev    # GPU backend + test/lint tools
+> ```
+
 ### 2.6 GPU TensorFlow (optional)
 
 For CUDA acceleration install the `gpu` extra (`uv pip install -e ".[gpu]"`),
@@ -150,6 +172,15 @@ PerchLab automatically puts the bundled CUDA libraries on `LD_LIBRARY_PATH`
 `PERCHLAB_MODEL__BACKEND=cpu` (still TensorFlow) or the ONNX backend. See the
 official [TensorFlow GPU guide](https://www.tensorflow.org/install/pip) for
 driver/CUDA background.
+
+**Log noise on GPU runs.** TensorFlow/XLA/CUDA print a fixed set of harmless
+lines every run (oneDNN and CPU-instruction notices, GPU/cuDNN/XLA init, ptxas
+register-spill notes, repeated `Delay kernel timed out` timing warnings), and
+perch-hoplite adds a numpy `np.divide` warning plus a duplicate-eBird-class-list
+warning. **None affect results.** PerchLab filters exactly these known-benign
+lines out of `stderr` by content, so any unrecognised line — including a genuine
+error — still shows. To see the raw, unfiltered output (e.g. when debugging),
+set `PERCHLAB_LOG_FILTER=0`.
 
 ### 2.7 Kaggle credentials (first model download)
 
@@ -212,7 +243,7 @@ uv run perchlab id \
     --output perchID \
     --window 5 --hop 5 \
     --top-k 3 \
-    --threshold 0.6 \
+    --threshold 0.1 \
     --format csv,raven
 
 # Multi-threshold sweep + clip extraction
@@ -275,7 +306,7 @@ multiple species in a window produce multiple rows).
 | `expected_label` | Parent-folder label, when recordings are organised by species. |
 | `label` | Predicted Perch label (scientific name). |
 | `threshold` | Confidence threshold this file was produced under. |
-| `confidence` | Prediction confidence in `[0, 1]` (sigmoid of the logit). |
+| `confidence` | Prediction confidence in `[0, 1]` (softmax over class logits by default; see §1). |
 | `file` | Path to the source audio file. |
 
 ### Benchmark metrics
@@ -311,9 +342,9 @@ separates your species well. The metric-vs-threshold plot helps choose an
 operating threshold. PR curves are more informative than ROC when classes are
 imbalanced.
 
-**Limitations.** Perch confidences are **uncalibrated** sigmoids and are *not*
-directly comparable across species, so a single global threshold means different
-things per class — treat thresholds as relative. Folder labels must match Perch's
+**Limitations.** Perch confidences are **uncalibrated** softmax scores and are
+*not* directly comparable across species, so a single global threshold means
+different things per class — treat thresholds as relative. Folder labels must match Perch's
 class names (scientific names) to score as positives; non-matching labels still
 appear in the confusion matrix but yield degenerate ROC/PR. Windows of silence in
 a species-labelled file are still counted as that species, which can depress

@@ -40,6 +40,10 @@ class ModelConfig(BaseModel):
     sample_rate_hz: int = PERCH_SAMPLE_RATE_HZ
     #: Windows per inference batch. Capped conservatively for small GPUs.
     batch_size: int = 16
+    #: Logit->confidence mapping. Perch V2's classifier is softmax-trained (per
+    #: the model paper), so ``softmax`` is the default; ``sigmoid`` gives an
+    #: independent per-class (multi-label) score but saturates on V2's logits.
+    activation: Literal["softmax", "sigmoid"] = "softmax"
 
 
 class PreprocessConfig(BaseModel):
@@ -117,7 +121,9 @@ class IdentifyConfig(BaseModel):
     window_s: float = PERCH_WINDOW_S
     hop_s: float = PERCH_WINDOW_S
     top_k: int = 3
-    threshold: float = 0.6
+    #: With softmax scoring, co-occurring species split the probability mass, so
+    #: a low default keeps those detections (matches typical Perch usage).
+    threshold: float = 0.1
     sweep: ThresholdSweep = Field(default_factory=ThresholdSweep)
     segments: SegmentConfig = Field(default_factory=SegmentConfig)
     #: Output formats to write: any of {"csv", "parquet", "raven"}.
@@ -144,7 +150,9 @@ class BenchmarkConfig(BaseModel):
     output_dir: Path | None = None
     window_s: float = PERCH_WINDOW_S
     hop_s: float = PERCH_WINDOW_S
-    threshold: float = 0.6
+    #: Primary operating point for the full metric report; low to suit softmax
+    #: scores (see :class:`ModelConfig.activation`).
+    threshold: float = 0.1
     sweep: ThresholdSweep = Field(default_factory=ThresholdSweep)
     #: Evaluation unit; "window" (default) or "file" aggregation.
     aggregate: Literal["window", "file"] = "window"

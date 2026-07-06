@@ -5,11 +5,17 @@ cache the fixed top-k predictions with their confidences
 (:class:`WindowPrediction`). Applying a confidence threshold — including a whole
 multi-threshold sweep — is then a cheap filter over that cache, guaranteeing
 identical inference results across thresholds.
+
+Design note (activation): Perch V2's species-classifier head is trained with a
+softmax activation and cross-entropy loss (Perch V2 paper), so :func:`softmax`
+is the default and recovers the probabilities the model was optimised to
+produce. :func:`sigmoid` (independent per-class, multi-label view) is kept as a
+selectable alternative, but note it saturates near 1.0 on V2's large logits.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,11 +26,28 @@ from .inference import WindowResult
 from .taxonomy import TaxonomyMap
 
 
+def softmax(logits: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax over the last axis.
+
+    Perch V2's classifier is softmax-trained (Perch V2 paper), so this — not
+    per-class sigmoid — matches the model's training objective. Classes compete
+    for a shared unit of probability mass, which de-saturates the scores (V2's
+    raw logits are large enough to make sigmoid collapse to ~1.0) and keeps
+    confidence thresholds meaningful.
+    """
+    x = np.asarray(logits, dtype=np.float64)
+    x = x - np.max(x, axis=-1, keepdims=True)
+    exp = np.exp(x)
+    return exp / np.sum(exp, axis=-1, keepdims=True)
+
+
 def sigmoid(logits: np.ndarray) -> np.ndarray:
     """Numerically stable elementwise logistic sigmoid.
 
-    Perch is multi-label, so per-class sigmoid (not softmax) maps each logit to
-    an independent confidence in ``[0, 1]``.
+    Treats each class independently (multi-label view). Kept as a selectable
+    alternative to :func:`softmax`, but Perch V2's classifier is softmax-trained
+    and its logits are large, so sigmoid saturates near 1.0 and makes confidence
+    thresholds ineffective; prefer :func:`softmax` for Perch V2.
     """
     out = np.empty_like(logits, dtype=np.float64)
     pos = logits >= 0
@@ -32,6 +55,23 @@ def sigmoid(logits: np.ndarray) -> np.ndarray:
     exp_neg = np.exp(logits[~pos])
     out[~pos] = exp_neg / (1.0 + exp_neg)
     return out
+
+
+#: Available logit -> confidence mappings, keyed by the ``model.activation`` config.
+ACTIVATIONS: dict[str, Callable[[np.ndarray], np.ndarray]] = {
+    "softmax": softmax,
+    "sigmoid": sigmoid,
+}
+
+
+def get_activation(name: str) -> Callable[[np.ndarray], np.ndarray]:
+    """Return the logit->confidence function for ``name`` (``softmax``|``sigmoid``)."""
+    try:
+        return ACTIVATIONS[name]
+    except KeyError as exc:  # pragma: no cover - config Literal already constrains this
+        raise ValueError(
+            f"Unknown activation '{name}'; expected one of {sorted(ACTIVATIONS)}."
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -61,15 +101,19 @@ class WindowPrediction:
 class ClassifierRunner:
     """Convert :class:`WindowResult` logits into detections."""
 
-    def __init__(self, taxonomy: TaxonomyMap, *, top_k: int) -> None:
+    def __init__(
+        self, taxonomy: TaxonomyMap, *, top_k: int, activation: str = "softmax"
+    ) -> None:
         """Initialise the runner.
 
         Args:
             taxonomy: Class-name mapping for labels/codes.
             top_k: Number of highest-ranked predictions to keep per window.
+            activation: Logit->confidence mapping (``softmax`` or ``sigmoid``).
         """
         self.taxonomy = taxonomy
         self.top_k = max(1, top_k)
+        self._activation = get_activation(activation)
 
     def predict_windows(self, results: Iterable[WindowResult]) -> list[WindowPrediction]:
         """Compute cached top-k predictions for each window (threshold-free).
@@ -82,7 +126,7 @@ class ClassifierRunner:
         """
         predictions: list[WindowPrediction] = []
         for result in results:
-            confidences = sigmoid(result.logits)
+            confidences = self._activation(result.logits)
             top_idx = _top_k_indices(confidences, self.top_k)
             ranked = [
                 RankedPrediction(

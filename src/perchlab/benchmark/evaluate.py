@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..classify import sigmoid
+from ..classify import get_activation
 from ..inference import InferenceEngine
 from ..logging import get_logger
 from ..models import PerchModel
@@ -50,6 +50,7 @@ def evaluate_dataset(
     engine: InferenceEngine,
     *,
     aggregate: str = "window",
+    activation: str = "softmax",
 ) -> EvalData:
     """Run inference over ``files`` and collect scores.
 
@@ -59,12 +60,15 @@ def evaluate_dataset(
         engine: Configured inference engine.
         aggregate: ``"window"`` (each window is a sample) or ``"file"`` (mean-pool
             a file's window scores into one sample).
+        activation: Logit->confidence mapping (``softmax`` or ``sigmoid``); must
+            match the identification workflow so metrics reflect real scores.
 
     Returns:
         An :class:`EvalData` bundle.
     """
     target_labels = sorted({f.label for f in files})
     target_idx = _resolve_target_indices(target_labels, model.class_names)
+    activation_fn = get_activation(activation)
 
     y_true: list[str] = []
     top1_label: list[str] = []
@@ -75,7 +79,7 @@ def evaluate_dataset(
 
     for lf in files:
         try:
-            window_confs = [sigmoid(r.logits) for r in engine.run_file(lf.path)]
+            window_confs = [activation_fn(r.logits) for r in engine.run_file(lf.path)]
         except AudioError as exc:
             _log.warning("Skipping %s: %s", lf.path.name, exc)
             continue

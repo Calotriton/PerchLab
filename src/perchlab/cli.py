@@ -9,9 +9,12 @@ for scripting. Both paths build an :class:`AppConfig` and dispatch to the same
 from __future__ import annotations
 
 from ._bootstrap import ensure_cuda_library_path
+from ._quiet import quiet_known_logs
 
-# Must run before TensorFlow is ever imported (see _bootstrap docstring).
+# Must run before TensorFlow is ever imported (see _bootstrap docstring), and
+# before Rich's console is created (so the stderr filter can preserve colour).
 ensure_cuda_library_path()
+quiet_known_logs()
 
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402

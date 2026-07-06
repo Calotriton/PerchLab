@@ -43,6 +43,26 @@ def timestamp_slug(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
 
 
+#: Default parent directory for all workflow outputs, relative to the current
+#: working directory (normally the project root). Interactive prompts and the
+#: CLI can still override the destination per run.
+DEFAULT_OUTPUT_ROOT = Path("data/outputs")
+
+
+def default_output_dir(prefix: str, now: datetime | None = None) -> Path:
+    """Return the default output directory for a workflow run.
+
+    Runs are grouped under :data:`DEFAULT_OUTPUT_ROOT` and suffixed with a
+    timestamp so repeated runs never collide, e.g.
+    ``data/outputs/perchlab_ID_20260706_083755``.
+
+    Args:
+        prefix: Workflow-specific name prefix (e.g. ``perchlab_ID``).
+        now: Optional timestamp override (defaults to the current time).
+    """
+    return DEFAULT_OUTPUT_ROOT / f"{prefix}_{timestamp_slug(now)}"
+
+
 def _git_sha() -> str | None:
     """Return the current git commit SHA, or ``None`` if unavailable."""
     try:
