@@ -14,7 +14,7 @@ actually loaded.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -48,23 +48,64 @@ def _resolve_preset_name(config: ModelConfig) -> str:
     return config.name.lower()
 
 
-def _extract_class_names(model: zoo_interface.EmbeddingModel, logits_key: str) -> list[str]:
-    """Return the class-name list for ``logits_key``.
+def _extract_class_names(
+    model: zoo_interface.EmbeddingModel, logits_key: str, num_classes: int
+) -> list[str]:
+    """Return the class-name list aligned with the ``logits_key`` head.
 
-    Handles both shapes of ``class_list``: a ``dict[str, ClassList]``
-    (TaxonomyModelTF / Perch V2) and a bare ``ClassList`` (PlaceholderModel).
+    ``class_list`` is either a bare ``ClassList`` (PlaceholderModel) or a
+    ``dict[str, ClassList]`` (TaxonomyModelTF / Perch V2). Perch V2 ships two
+    *parallel* lists of equal length — ``labels`` (iNaturalist scientific names,
+    which the rest of PerchLab expects for Raven tables and benchmark matching)
+    and ``perch_v2_ebird_classes`` (eBird codes) — both aligned to the single
+    ``label`` logits head. Selecting by dict order is therefore unsafe: it can
+    silently return eBird codes. :func:`_select_class_list` instead matches the
+    logits width and the head name.
     """
     class_list = getattr(model, "class_list", None)
     if class_list is None:
         raise ModelError("Model exposes no class_list; cannot map logits to names.")
-    if isinstance(class_list, dict):
-        chosen = class_list.get(logits_key) or next(iter(class_list.values()))
-    else:
-        chosen = class_list
+    chosen = (
+        _select_class_list(class_list, logits_key, num_classes)
+        if isinstance(class_list, dict)
+        else class_list
+    )
     classes = getattr(chosen, "classes", None)
     if classes is None:
         raise ModelError("class_list has no `classes` attribute.")
     return list(classes)
+
+
+def _select_class_list(class_lists: dict[str, Any], logits_key: str, num_classes: int) -> Any:
+    """Pick the class list that maps a logits head to names.
+
+    A valid mapping must be exactly as long as the logits axis, so width filters
+    first; among the width-matching lists we prefer the one whose key matches the
+    head name (``label`` -> ``labels``, else a prefix match), and only then fall
+    back to the first candidate. This makes the choice deterministic instead of
+    dependent on class-list insertion order.
+    """
+    if not class_lists:
+        raise ModelError("Model exposes an empty class_list; cannot map logits to names.")
+    aligned = {
+        key: value
+        for key, value in class_lists.items()
+        if len(getattr(value, "classes", ())) == num_classes
+    }
+    candidates = aligned or class_lists
+    chosen_key = (
+        next((key for key in (logits_key, f"{logits_key}s") if key in candidates), None)
+        or next((key for key in candidates if key.startswith(logits_key)), None)
+        or next(iter(candidates))
+    )
+    if len(class_lists) > 1:
+        _log.debug(
+            "Class lists %s available; using '%s' for logits head '%s'.",
+            list(class_lists),
+            chosen_key,
+            logits_key,
+        )
+    return candidates[chosen_key]
 
 
 @dataclass
@@ -137,7 +178,8 @@ class PerchModel:
         if not probe.logits:
             raise ModelError(f"Model '{name}' produced no logits; cannot classify.")
         logits_key = "label" if "label" in probe.logits else next(iter(probe.logits))
-        class_names = _extract_class_names(model, logits_key)
+        num_classes = int(np.asarray(probe.logits[logits_key]).shape[-1])
+        class_names = _extract_class_names(model, logits_key, num_classes)
 
         _log.info(
             "Model '%s' ready: %d classes, window=%.1fs, sr=%d Hz.",
