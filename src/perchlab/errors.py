@@ -35,3 +35,7 @@ class WorkflowError(PerchLabError):
 
 class BenchmarkError(PerchLabError):
     """Raised when a benchmark cannot be computed (e.g. no labelled data found)."""
+
+
+class ThresholdError(PerchLabError):
+    """Raised when optimal-threshold estimation cannot proceed (e.g. bad layout)."""

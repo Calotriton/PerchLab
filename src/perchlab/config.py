@@ -159,6 +159,39 @@ class BenchmarkConfig(BaseModel):
     mode: Literal["classification", "annotations", "compare"] = "classification"
 
 
+class OptimalThresholdConfig(BaseModel):
+    """Parameters for Workflow 4 - Optimal Confidence Threshold Detection.
+
+    Fits, per species, a logistic regression of *correct vs. incorrect* on the
+    logit-transformed confidence score of human-validated detections, then solves
+    for the confidence at which a detection has :attr:`target_probability` of
+    being correct. See the README for the full methodology.
+    """
+
+    input_dir: Path | None = None
+    output_dir: Path | None = None
+    window_s: float = PERCH_WINDOW_S
+    hop_s: float = PERCH_WINDOW_S
+    #: Target scientific name (Perch class). ``None`` estimates a separate
+    #: threshold for every species folder found under ``input_dir``.
+    species: str | None = None
+    #: Probability of correct identification the threshold is solved for.
+    target_probability: float = 0.95
+    #: Lower edges of the confidence-score categories in the precision table
+    #: (each bin runs to the next edge; the last runs to 1.0).
+    bin_edges: list[float] = Field(default_factory=lambda: [0.1, 0.3, 0.5])
+
+    @model_validator(mode="after")
+    def _check(self) -> OptimalThresholdConfig:
+        if not (0.0 < self.target_probability < 1.0):
+            raise ConfigError("target_probability must be in (0, 1).")
+        if not self.bin_edges or any(not (0.0 <= e <= 1.0) for e in self.bin_edges):
+            raise ConfigError("bin_edges must be non-empty and within [0, 1].")
+        if list(self.bin_edges) != sorted(self.bin_edges):
+            raise ConfigError("bin_edges must be ascending.")
+        return self
+
+
 class AppConfig(BaseModel):
     """Top-level PerchLab configuration."""
 
@@ -171,6 +204,7 @@ class AppConfig(BaseModel):
     identify: IdentifyConfig = Field(default_factory=IdentifyConfig)
     embed: EmbedConfig = Field(default_factory=EmbedConfig)
     benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
+    optimal_threshold: OptimalThresholdConfig = Field(default_factory=OptimalThresholdConfig)
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

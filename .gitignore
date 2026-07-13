@@ -29,3 +29,9 @@ benchmark_*/
 # OS / editor
 .DS_Store
 *.swp
+
+# Claude working files: learning logs + self-check proof suite. Kept local so
+# the shared research repo stays clean; not part of the shipped tool.
+/.claude/SESSION_LOG.md
+/.claude/FEEDBACK_LOG.md
+/tests/e2e/

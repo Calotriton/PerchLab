@@ -211,5 +211,33 @@ def benchmark(
     _execute(ctx, "benchmark", overrides)
 
 
+@app.command("threshold")
+def threshold(
+    ctx: typer.Context,
+    input: Path = typer.Option(..., "--input", "-i", help="Validated dataset folder."),
+    output: Path | None = typer.Option(None, "--output", "-o", help="Output folder."),
+    species: str | None = typer.Option(
+        None, "--species", help="Target species (scientific name); omit for one per subfolder."
+    ),
+    target_probability: float | None = typer.Option(
+        None, "--target-probability", help="Probability of correct ID to solve for (default 0.95)."
+    ),
+    window: float | None = typer.Option(None, "--window", help="Window size (s)."),
+    hop: float | None = typer.Option(None, "--hop", help="Hop size (s)."),
+) -> None:
+    """Run Optimal Confidence Threshold Detection (Workflow 4)."""
+    overrides = {
+        "optimal_threshold": {
+            "input_dir": input,
+            "output_dir": output,
+            "species": species,
+            "target_probability": target_probability,
+            "window_s": window,
+            "hop_s": hop,
+        }
+    }
+    _execute(ctx, "threshold", overrides)
+
+
 if __name__ == "__main__":  # pragma: no cover
     app()

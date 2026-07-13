@@ -43,10 +43,12 @@ def _register_builtins() -> None:
     from .benchmark import BenchmarkWorkflow
     from .embed import EmbeddingWorkflow
     from .identify import SpeciesIdentificationWorkflow
+    from .threshold import OptimalThresholdWorkflow
 
     register(SpeciesIdentificationWorkflow())
     register(EmbeddingWorkflow())
     register(BenchmarkWorkflow())
+    register(OptimalThresholdWorkflow())
 
 
 _register_builtins()

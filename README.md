@@ -10,6 +10,7 @@ tables are drop-in compatible with Raven/BirdNET selection tables).
 - **Species Identification** — Perch V2's built-in classifier, top-k per window, confidence threshold, optional clip extraction.
 - **Embedding Generation** — store embeddings in a Perch Hoplite SQLite database (optionally exported to Parquet/NPZ).
 - **Benchmark** — evaluate Perch on a labelled dataset with accuracy, precision/recall/F1, confusion matrices, ROC/PR curves and AUCs, and a full scikit-learn classification report.
+- **Optimal Confidence Threshold Detection** — from human-validated detections, estimate the species-specific confidence threshold giving a target (default 95%) probability of correct identification, with a precision-by-confidence table and a probability-of-correct plot per species.
 
 ---
 
@@ -20,9 +21,10 @@ tables are drop-in compatible with Raven/BirdNET selection tables).
 3. [Usage](#3-usage)
 4. [Concepts](#4-concepts)
 5. [Benchmark](#5-benchmark)
-6. [Project structure](#6-project-structure)
-7. [Scientific background](#7-scientific-background)
-8. [References](#8-references)
+6. [Optimal confidence threshold](#6-optimal-confidence-threshold)
+7. [Project structure](#7-project-structure)
+8. [Scientific background](#8-scientific-background)
+9. [References](#9-references)
 
 ---
 
@@ -226,6 +228,7 @@ Select a workflow:
   1) Species Identification
   2) Embedding Generation
   3) Benchmark
+  4) Optimal Confidence Threshold Detection
 ```
 
 Pick one and PerchLab prompts for each parameter (input folder with path
@@ -257,6 +260,11 @@ uv run perchlab embed --input clips --output embeddings --labeled --export parqu
 # Benchmark on a labelled dataset
 uv run perchlab benchmark --input labelled_dataset --output report \
     --threshold-start 0.0 --threshold-end 1.0 --threshold-step 0.1
+
+# Optimal confidence threshold from human-validated detections
+uv run perchlab threshold --input validated --output thresholds \
+    --species "Periparus ater" --target-probability 0.95
+# (omit --species to estimate one threshold per species subfolder)
 ```
 
 Any command also accepts `--config run.yaml` for reproducible batch runs; CLI
@@ -274,6 +282,10 @@ flags override the YAML, which overrides environment variables
 - **Benchmark** writes `metrics.json`, `metrics.csv`, `classification_report.txt`,
   `confusion_matrix.csv`, `sweep.csv`, four PNG figures, and a human-readable
   `report.md`.
+- **Optimal Confidence Threshold** writes `thresholds.csv`/`thresholds.json` (the
+  estimated threshold + regression coefficients per species), `precision_table.csv`
+  (detections/verified/precision by confidence category), a
+  `probability_curves.png` plot, a human-readable `report.md`, and a `manifest.json`.
 
 ---
 
@@ -352,7 +364,129 @@ apparent accuracy for long recordings (prefer `--aggregate file` or short clips)
 
 ---
 
-## 6. Project structure
+## 6. Optimal confidence threshold
+
+The confidence score is Perch's estimated probability that a detection is correct
+(1 = perfect match). Used as a **threshold**, it filters the output: a higher
+threshold raises the proportion of correctly classified detections but keeps
+fewer detections overall. This workflow answers *"what threshold should I use for
+this species?"* — and, crucially, it estimates a **separate threshold per
+species**, because the relationship between confidence and correctness differs
+between species (a single universal threshold is not appropriate).
+
+### What you provide
+
+A set of **human-validated detections** for the species. In practice you run
+Species Identification (ideally with `--extract` to save the detection clips),
+then a person listens to each clip and inspects its spectrogram to decide whether
+the species is truly **present** (correct) or **absent** (a false positive). Sort
+the clips into two folders:
+
+```
+validated/
+  Periparus ater/
+    correct/     ← species present (accepted synonyms: present, true, tp, 1, yes)
+    incorrect/   ← species absent  (accepted synonyms: absent, false, fp, 0, no)
+  Certhia brachydactyla/
+    correct/ ...
+    incorrect/ ...
+```
+
+For a single species you can point `--input` straight at a folder that contains
+`correct/` and `incorrect/` and pass `--species "Periparus ater"`. PerchLab
+re-runs Perch over each clip to recover the confidence it assigns that species
+(the strongest window), pairing each confidence with its correct/incorrect verdict.
+
+### Precision and the 95%-correct threshold
+
+**Precision** here is the proportion of a species' detections that are correct:
+`verified correct / total verified`. The workflow tabulates precision by
+confidence category (mirroring the reference table below), so you can see
+precision climb as confidence rises. This example is PerchLab's output on the
+Coal Tit validation set of Bota et al. (2023), and reproduces their Table 1:
+
+| Confidence category | Detections | Verified | Precision |
+| --- | --- | --- | --- |
+| [0.10, 0.30) | 157 | 134 | 85.4% |
+| [0.30, 0.50) | 77 | 77 | 100.0% |
+| [0.50, 1.00] | 75 | 75 | 100.0% |
+| **TOTAL** | 309 | 286 | 92.6% |
+
+The **threshold** is the confidence that corresponds to a chosen probability of
+correct identification (default **95%**). Applied as a post-processing filter, it
+keeps only detections with confidence ≥ the threshold — these are the detections
+*predicted to be correct with ≥95% probability*. Note this does **not** retain
+95% of detections; it retains those estimated to be 95% reliable. Raising the
+threshold raises precision but lowers the number of detections (and thus the
+proportion of calls/presences recovered).
+
+### How it is computed
+
+1. **Back-transform** each confidence score to the logit scale (the standard
+   logit, i.e. the inverse sigmoid, following Wood et al. 2023):
+
+   ```
+   logit_score = ln( confidence / (1 - confidence) )
+   ```
+
+2. **Fit a logistic regression** per species, where the response is whether the
+   detection was correct (1) or incorrect (0) and the predictor is the
+   logit-transformed confidence. This calibrates raw confidence into an actual
+   probability of correct identification:
+
+   ```
+   P(correct) = sigmoid( b0 + b1 · logit_score )
+   ```
+
+   (fitted by maximum likelihood, i.e. unregularised logistic regression).
+
+3. **Solve for the target probability.** Setting `P(correct) = 0.95` and
+   inverting gives the logit score, then the confidence, at which detections are
+   95% likely to be correct:
+
+   ```
+   logit_score* = ( ln(0.95 / 0.05) − b0 ) / b1
+   threshold    = sigmoid( logit_score* ) = 1 / (1 + exp( −logit_score* ))
+   ```
+
+   The resulting confidence is adopted as the species-specific threshold and can
+   then be applied to the model's full set of predictions, yielding a filtered,
+   high-confidence dataset — a statistically justified balance between reliability
+   and the number of detections retained.
+
+> **On the transform and inversion.** The method comes from Wood et al. (2023);
+> Bota et al. (2023) applied it to two bird species. PerchLab uses the **standard
+> logit** `ln(c/(1−c))` (Wood's transform and the inverse of the sigmoid that
+> produces the score) and inverts the fitted model for the confidence at the
+> target probability — the textbook way to invert a logistic calibration.
+> Validated against Bota's raw dataset, PerchLab reproduces their Table 1 exactly
+> and returns a threshold whose fitted P(correct) is precisely 0.95 (Coal Tit
+> ≈0.25). Note Bota's *published* threshold formula, taken literally, is a garbled
+> transcription that under-shoots the 95% target for one of their species; the
+> standard inversion used here is the correct one. A separate threshold is
+> estimated per species, since the confidence→accuracy relationship varies.
+
+### Outputs
+
+- **`probability_curves.png`** — one panel per species: the validated detections
+  as a 0/1 scatter over confidence, the fitted logistic probability-of-correct
+  curve with its 95% confidence band, the target-probability line, and the
+  estimated threshold marked (like the figure in the reference study).
+- **`precision_table.csv`** — the detections/verified/precision table above, per
+  species, with a TOTAL row.
+- **`thresholds.csv`** / **`thresholds.json`** — the estimated threshold, sample
+  counts, overall precision, and the fitted `intercept`/`slope` per species.
+- **`report.md`** — a human-readable summary embedding the table and plot.
+- **`manifest.json`** — the exact run configuration.
+
+When a species has too few validated clips, only correct **or** only incorrect
+examples, or a confidence that is not positively associated with correctness
+(slope ≤ 0), no threshold can be estimated: that species is reported with an
+empty threshold and an explanatory `note`, and the rest still proceed.
+
+---
+
+## 7. Project structure
 
 ```
 src/perchlab/
@@ -370,10 +504,11 @@ src/perchlab/
   embedding.py      EmbeddingRunner: write embeddings/labels to a Hoplite DB.
   prompts.py        Interactive prompt helpers (path autocompletion, etc.).
   util.py           Determinism (seeding) and run manifests.
-  cli.py            Typer CLI: interactive menu + id/embed/benchmark subcommands.
-  workflows/        Workflow registry + the three workflows.
+  cli.py            Typer CLI: interactive menu + id/embed/benchmark/threshold subcommands.
+  workflows/        Workflow registry + the four workflows.
   io/               Raven selection tables + CSV/Parquet writers.
   benchmark/        Labelled-dataset eval: dataset/evaluate/metrics/sweep/plots/report.
+  threshold/        Optimal-threshold estimation: dataset/collect/stats/plots/report.
 configs/default.yaml  Documented default configuration.
 notebooks/            Example notebooks mirroring the workflows.
 tests/                pytest suite (offline PlaceholderModel + real-model marker).
@@ -390,7 +525,7 @@ Perch V2 was trained on a fixed input representation, and inference must match i
 
 ---
 
-## 7. Scientific background
+## 8. Scientific background
 
 Perch matters for bioacoustics because a single, broadly-trained model provides a
 strong foundation for many downstream tasks:
@@ -403,7 +538,7 @@ strong foundation for many downstream tasks:
 
 ---
 
-## 8. References
+## 9. References
 
 - **Perch Hoplite** — https://github.com/google-research/perch-hoplite
 - **Perch V2 (Kaggle)** — https://www.kaggle.com/models/google/bird-vocalization-classifier/tensorFlow2/perch_v2/2
