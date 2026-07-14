@@ -121,6 +121,9 @@ def identify(
     bin_width: float | None = typer.Option(None, "--bin-width", help="Confidence-bin width."),
     max_per_bin: int | None = typer.Option(None, "--max-per-bin", help="Max clips per bin."),
     clip_duration: float | None = typer.Option(None, "--clip-duration", help="Clip length (s)."),
+    context: float | None = typer.Option(
+        None, "--context", help="Extra seconds added to each side of the clip for context."
+    ),
     seed: int | None = typer.Option(None, "--extract-seed", help="Segment sampling seed."),
 ) -> None:
     """Run Species Identification (Workflow 1)."""
@@ -146,6 +149,7 @@ def identify(
                 "bin_width": bin_width,
                 "max_per_bin": max_per_bin,
                 "clip_duration_s": clip_duration,
+                "context_s": context,
                 "seed": seed,
             },
         }

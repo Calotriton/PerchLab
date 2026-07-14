@@ -80,7 +80,17 @@ class SegmentConfig(BaseModel):
     bin_width: float = 0.1
     max_per_bin: int = 20
     clip_duration_s: float = PERCH_WINDOW_S
+    #: Extra seconds of surrounding audio added to *each* side of the central
+    #: clip for context; the written clip is ``clip_duration_s + 2 * context_s``
+    #: long (0 = no padding).
+    context_s: float = 0.0
     seed: int | None = None
+
+    @model_validator(mode="after")
+    def _check_context(self) -> SegmentConfig:
+        if self.context_s < 0:
+            raise ConfigError("segments.context_s must be >= 0.")
+        return self
 
 
 class ThresholdSweep(BaseModel):

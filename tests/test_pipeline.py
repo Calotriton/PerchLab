@@ -11,12 +11,13 @@ import soundfile as sf
 
 from perchlab.audio import discover_audio, parse_filename
 from perchlab.classify import ClassifierRunner, sigmoid, softmax
-from perchlab.config import FilenameConfig, PreprocessConfig
-from perchlab.detections import CSV_COLUMNS
+from perchlab.config import FilenameConfig, PreprocessConfig, SegmentConfig
+from perchlab.detections import CSV_COLUMNS, Detection
 from perchlab.inference import WindowResult
 from perchlab.io.raven import RAVEN_COLUMNS, read_selection_table, write_selection_table
 from perchlab.io.tables import write_csv
 from perchlab.preprocess import AudioPreprocessor
+from perchlab.segments import extract_segments
 from perchlab.taxonomy import TaxonomyMap
 
 
@@ -139,3 +140,43 @@ def test_writers_roundtrip(tmp_path: Path) -> None:
     csv = pd.read_csv(csv_path)
     assert list(csv.columns) == CSV_COLUMNS
     assert csv["date"].tolist() == ["2025-05-30", "2025-05-30"]
+
+
+def _detection_in_file(wav: Path, *, start_s: float, end_s: float) -> Detection:
+    meta = parse_filename(wav, FilenameConfig())
+    return Detection(
+        recording=meta, start_s=start_s, end_s=end_s, window_s=5.0, hop_s=5.0, rank=1,
+        label="Ardea cinerea", common_name="Ardea cinerea", species_code="Ardea cinerea",
+        confidence=0.9, threshold=0.1, expected_label=None,
+    )
+
+
+def _clip_frames(out_dir: Path) -> int:
+    clips = list((out_dir / "Ardea_cinerea").glob("*.wav"))
+    assert len(clips) == 1
+    return int(sf.info(str(clips[0])).frames)
+
+
+def test_extract_segments_context_padding(tmp_path: Path) -> None:
+    sr = 32_000
+    wav = tmp_path / "PIC02_20250530_040000.wav"
+    sf.write(wav, np.zeros(sr * 20, dtype=np.float32), sr)  # 20 s file
+    det = _detection_in_file(wav, start_s=5.0, end_s=10.0)  # a 5 s detection window
+
+    # No context: clip is exactly clip_duration_s.
+    plain = extract_segments(
+        [det], sample_rate=sr,
+        config=SegmentConfig(enabled=True, clip_duration_s=5.0, seed=0),
+        output_dir=tmp_path / "plain",
+    )
+    assert plain.clips_written == 1
+    assert _clip_frames(tmp_path / "plain") == 5 * sr
+
+    # 1 s of context per side: 5 s centre -> 7 s total.
+    padded = extract_segments(
+        [det], sample_rate=sr,
+        config=SegmentConfig(enabled=True, clip_duration_s=5.0, context_s=1.0, seed=0),
+        output_dir=tmp_path / "padded",
+    )
+    assert padded.clips_written == 1
+    assert _clip_frames(tmp_path / "padded") == 7 * sr

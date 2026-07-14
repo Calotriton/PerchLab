@@ -64,6 +64,10 @@ class SpeciesIdentificationWorkflow(Workflow):
             cfg.segments.bin_width = prompts.ask_float("  Confidence-bin width:", default=0.1)
             cfg.segments.max_per_bin = prompts.ask_int("  Max samples per bin:", default=20)
             cfg.segments.clip_duration_s = prompts.ask_float("  Clip duration (s):", default=5.0)
+            if prompts.ask_bool("  Add context seconds around each clip?", default=False):
+                cfg.segments.context_s = prompts.ask_float(
+                    "    Context seconds on each side:", default=1.0
+                )
             seed = prompts.ask_text("  Random seed (blank = none):", default="")
             cfg.segments.seed = int(seed) if seed else None
         return config

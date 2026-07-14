@@ -90,7 +90,11 @@ def extract_segments(
     for det in sampled:
         try:
             clip = _read_centered_clip(
-                audio_io, det, sample_rate=sample_rate, clip_duration_s=config.clip_duration_s
+                audio_io,
+                det,
+                sample_rate=sample_rate,
+                clip_duration_s=config.clip_duration_s,
+                context_s=config.context_s,
             )
         except Exception as exc:  # never abort the batch on one bad clip
             _log.warning(
@@ -116,15 +120,23 @@ def _read_centered_clip(
     *,
     sample_rate: int,
     clip_duration_s: float,
+    context_s: float = 0.0,
 ) -> np.ndarray:
-    """Read a fixed-duration clip centered on the detection, clamped to bounds."""
+    """Read a clip centered on the detection, clamped to bounds.
+
+    The central clip is ``clip_duration_s`` seconds long; ``context_s`` seconds of
+    surrounding audio are added on *each* side, so the returned clip spans
+    ``clip_duration_s + 2 * context_s`` seconds (e.g. a 5 s clip with 1 s of
+    context yields a 7 s clip: 1 s before, the 5 s centre, and 1 s after).
+    """
+    total_s = clip_duration_s + 2.0 * max(0.0, context_s)
     file_duration = _file_duration_s(det.recording.path)
     center = 0.5 * (det.start_s + det.end_s)
-    start = center - clip_duration_s / 2.0
-    start = max(0.0, min(start, max(0.0, file_duration - clip_duration_s)))
-    clip = audio_io.load_audio_window(str(det.recording.path), start, sample_rate, clip_duration_s)
+    start = center - total_s / 2.0
+    start = max(0.0, min(start, max(0.0, file_duration - total_s)))
+    clip = audio_io.load_audio_window(str(det.recording.path), start, sample_rate, total_s)
     clip = np.asarray(clip, dtype=np.float32)
-    target = int(round(clip_duration_s * sample_rate))
+    target = int(round(total_s * sample_rate))
     if clip.size < target:
         clip = np.pad(clip, (0, target - clip.size))
     return clip[:target]

@@ -252,7 +252,8 @@ uv run perchlab id \
 # Multi-threshold sweep + clip extraction
 uv run perchlab id --input recordings --output perchID \
     --threshold-start 0.1 --threshold-end 1.0 --threshold-step 0.1 \
-    --extract --max-per-bin 20 --clip-duration 5 --extract-seed 0
+    --extract --max-per-bin 20 --clip-duration 5 --context 1 --extract-seed 0
+# --context 1 pads each 5 s clip with 1 s on both sides -> 7 s clips for context
 
 # Embedding generation (labelled: one folder per species)
 uv run perchlab embed --input clips --output embeddings --labeled --export parquet
