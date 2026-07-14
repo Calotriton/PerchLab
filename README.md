@@ -90,6 +90,17 @@ post-processing filter (so a whole multi-threshold sweep needs only one pass).
 Because softmax scores are lower than saturated sigmoids, the default threshold
 is **0.1** — high enough to drop noise, low enough to keep co-occurring species.
 
+### One inference path for every workflow
+
+All four workflows share the same core: **discover** audio files → load Perch V2
+**once** → **preprocess** each file to the input contract → **frame** it into
+windows → run the **forward pass** in batches → hand the per-window
+embeddings/logits to the workflow. Only the final step differs — top-k detections
+(Identification), an embedding database (Embedding), evaluation metrics
+(Benchmark), or a per-species logistic fit (Optimal Threshold). This shared
+engine is why interactive and command-line modes give identical results, and why
+a whole threshold sweep costs a single inference pass.
+
 ---
 
 ## 2. Installation
@@ -215,7 +226,27 @@ The model is cached under `~/.cache/kagglehub` afterwards.
 
 ## 3. Usage
 
-### 3.1 Interactive mode
+### 3.1 Quick start
+
+After installing (§2) and setting a Kaggle token (§2.7), the simplest run is the
+interactive menu. The **first run downloads Perch V2** (cached under
+`~/.cache/kagglehub` afterwards, so later runs start immediately):
+
+```bash
+uv run perchlab
+```
+
+Or identify species in a folder of recordings in a single line:
+
+```bash
+uv run perchlab id --input recordings --output results
+```
+
+That writes, under `results/threshold_0.10/`, one CSV + Raven table per
+recording, an aggregated `all_detections.csv`, a per-species `summary.txt`, and a
+`manifest.json` capturing the exact run.
+
+### 3.2 Interactive mode
 
 ```bash
 uv run perchlab
@@ -231,11 +262,32 @@ Select a workflow:
   4) Optimal Confidence Threshold Detection
 ```
 
-Pick one and PerchLab prompts for each parameter (input folder with path
-autocompletion, output folder, window/hop, top-k, threshold, …). Defaults come
-from the central configuration, so pressing Enter accepts them.
+Pick one and PerchLab prompts for each parameter, showing the configured default
+in brackets — press Enter to accept it. Folder prompts offer **path
+autocompletion**, so it works over SSH/WSL. For example, Species Identification
+asks:
 
-### 3.2 Command-line mode (scripting)
+```
+? Input folder (recordings): ./recordings
+? Output folder: data/outputs/perchlab_ID_20260714_101500
+? Window size (s): 5.0
+? Hop size (s): 5.0
+? Top-k (predictions per window): 3
+? Run multiple confidence thresholds? No
+? Confidence threshold: 0.1
+? Extract audio segments? Yes
+?   Confidence-bin width: 0.1
+?   Max samples per bin: 20
+?   Clip duration (s): 5.0
+?   Add context seconds around each clip? Yes
+?     Context seconds on each side: 1.0
+?   Random seed (blank = none):
+```
+
+Interactive and command-line modes build the same configuration and run the same
+code, so results never diverge between them.
+
+### 3.3 Command-line mode (scripting)
 
 The same workflows run non-interactively:
 
@@ -268,11 +320,51 @@ uv run perchlab threshold --input validated --output thresholds \
 # (omit --species to estimate one threshold per species subfolder)
 ```
 
-Any command also accepts `--config run.yaml` for reproducible batch runs; CLI
-flags override the YAML, which overrides environment variables
-(`PERCHLAB_MODEL__BACKEND=onnx`), which override the built-in defaults.
+Run `uv run perchlab <command> --help` for the complete, up-to-date flag list of
+any subcommand. Every command also accepts `--config run.yaml`; see
+[Configuration](#34-configuration) for how flags, environment variables, and YAML
+combine.
 
-### 3.3 Interpreting outputs
+### 3.4 Configuration
+
+Every parameter has a default in `perchlab.config`, so most runs need no
+configuration at all. When you do override something, values resolve with the
+precedence **CLI flags > environment variables > `--config` YAML > built-in
+defaults**.
+
+**Config file.** Copy `configs/default.yaml` (a fully documented mirror of the
+defaults), edit what you need, and pass it — you only have to list the keys you
+change:
+
+```bash
+uv run perchlab id --input recordings --config run.yaml
+```
+
+**Environment variables.** Prefix with `PERCHLAB_` and join nested keys with a
+double underscore — handy for CI or one-off tweaks without editing a file:
+
+```bash
+export PERCHLAB_MODEL__BACKEND=onnx     # -> model.backend = onnx
+export PERCHLAB_SEED=0                    # -> global RNG seed
+export PERCHLAB_IDENTIFY__TOP_K=5         # -> identify.top_k = 5
+```
+
+**Recorder filename parsing.** PerchLab reads each recording's start date/time and
+device ID from its filename using a configurable regex with named groups
+`device`/`date`/`time`. The default matches PIC recorders
+(`PIC02_20250530_040000.wav`); override it for AudioMoth, Song Meter, and others:
+
+```yaml
+filename:
+  pattern: '(?P<device>[A-Za-z0-9]+)_(?P<date>\d{8})_(?P<time>\d{6})'
+  date_format: '%Y%m%d'
+  time_format: '%H%M%S'
+```
+
+Unrecognised filenames still process — the `date`, `hour`, and `time` columns are
+just left blank.
+
+### 3.5 Interpreting outputs
 
 - **Identification** writes, under `threshold_<value>/`: one CSV per recording, a
   matching `.selection.table.txt` (Raven), an `all_detections.csv` aggregate, a
@@ -522,7 +614,23 @@ Perch V2 was trained on a fixed input representation, and inference must match i
 - **Mono** — the model has a single input channel; stereo is reduced to one channel.
 - **32 kHz** — the sample rate the spectrogram front-end expects; resampling keeps the frequency content aligned with training.
 - **float32** — the numeric type the network operates on; integer PCM is converted to floating point.
-- **Normalization** — each window is peak-normalized so loud and quiet recordings are treated consistently. PerchLab **reuses Perch Hoplite's own per-window normalization** (`EmbeddingModel.normalize_audio`) rather than reimplementing it; PerchLab's preprocessing focuses on mono/32 kHz/float32 conversion and validation. See [`perch_hoplite/zoo/taxonomy_model_tf.py`](https://github.com/google-research/perch-hoplite/blob/main/perch_hoplite/zoo/taxonomy_model_tf.py).
+- **Normalization** — each 5-second window is peak-normalized (its mean removed, then scaled so the loudest sample sits at `target_peak = 0.25`, the value chosen by Perch's authors) so loud and quiet recordings are treated consistently. PerchLab **reuses Perch Hoplite's own per-window normalization** (`EmbeddingModel.normalize_audio`) rather than reimplementing it; PerchLab's preprocessing focuses on mono/32 kHz/float32 conversion and validation. See [`perch_hoplite/zoo/taxonomy_model_tf.py`](https://github.com/google-research/perch-hoplite/blob/main/perch_hoplite/zoo/taxonomy_model_tf.py).
+
+### Reproducibility across tools
+
+Perch V2 is **not amplitude-invariant**, so the confidence a window receives
+depends on this preprocessing, not only on the audio content. PerchLab always
+follows Hoplite's canonical path — resample to 32 kHz, then peak-normalize each
+window to `0.25` — before every forward pass. A separate script that feeds
+**raw, un-normalized** audio to the model, or that **resamples with a different
+library**, will produce slightly different confidence scores (typically within
+~0.05). The predicted species and window timings still agree; but because a fixed
+global threshold turns a continuous score into a keep/drop decision, those small
+differences can retain or discard a few **borderline** detections (those sitting
+right around the threshold) and reshuffle the low-confidence 2nd/3rd-ranked
+predictions. To reproduce another pipeline exactly, match **both** its resampler
+and its peak-normalization; the normalization is the larger factor and is the one
+that follows Perch's official inference path.
 
 ---
 
