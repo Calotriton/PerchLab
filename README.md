@@ -349,6 +349,26 @@ export PERCHLAB_SEED=0                    # -> global RNG seed
 export PERCHLAB_IDENTIFY__TOP_K=5         # -> identify.top_k = 5
 ```
 
+**Audio preprocessing (normalization + resampler).** Two knobs let you match a
+different pipeline or study the effect of preprocessing on scores — available on
+every workflow subcommand, interactively (answer *yes* to "Customize audio
+preprocessing?"), or in a config file:
+
+```bash
+uv run perchlab id --input recordings --normalize none --resampler soxr_hq
+```
+
+| Option | Values | Meaning |
+| --- | --- | --- |
+| `preprocess.normalize` | `hoplite` (default) / `none` | `hoplite` peak-normalizes each 5 s window to `target_peak = 0.25` (Perch's canonical preprocessing); `none` feeds **raw** audio to the model. |
+| `preprocess.resampler` | `polyphase` (default) / `soxr_hq` | Resampling filter used to reach 32 kHz. `polyphase` is Hoplite's native choice; `soxr_hq` is librosa's default. |
+
+The defaults (`hoplite` + `polyphase`) are the recommended, canonical Perch path
+and should be left alone for normal use. Change them only to **reproduce another
+tool's numbers** (e.g. a hand-rolled `serving_default` script that skips
+normalization) — see [Reproducibility across tools](#reproducibility-across-tools).
+`normalize` is the dominant factor; `resampler` is a minor secondary effect.
+
 **Recorder filename parsing.** PerchLab reads each recording's start date/time and
 device ID from its filename using a configurable regex with named groups
 `device`/`date`/`time`. The default matches PIC recorders
@@ -630,7 +650,11 @@ differences can retain or discard a few **borderline** detections (those sitting
 right around the threshold) and reshuffle the low-confidence 2nd/3rd-ranked
 predictions. To reproduce another pipeline exactly, match **both** its resampler
 and its peak-normalization; the normalization is the larger factor and is the one
-that follows Perch's official inference path.
+that follows Perch's official inference path. Both are exposed as the
+`preprocess.normalize` and `preprocess.resampler` options (see
+[Configuration](#34-configuration)) — for example, `--normalize none --resampler
+soxr_hq` reproduces a raw `librosa.load` + `serving_default` script that skips
+Hoplite's normalization.
 
 ---
 

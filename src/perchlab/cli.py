@@ -34,6 +34,20 @@ app = typer.Typer(
 
 _log = get_logger("cli")
 
+# Shared preprocessing options, available on every workflow subcommand. Perch V2
+# is not amplitude-invariant, so these change confidence scores; see the README.
+_NORMALIZE_OPT = typer.Option(
+    None, "--normalize", help="Per-window peak normalization: hoplite | none."
+)
+_RESAMPLER_OPT = typer.Option(
+    None, "--resampler", help="Resampling filter: polyphase | soxr_hq."
+)
+
+
+def _preprocess_override(normalize: str | None, resampler: str | None) -> dict[str, Any]:
+    """Build the shared ``preprocess`` override block for a subcommand."""
+    return {"normalize": normalize, "resampler": resampler}
+
 
 def _clean(overrides: dict[str, Any]) -> dict[str, Any]:
     """Drop ``None`` values recursively so unset CLI flags don't override config."""
@@ -82,8 +96,29 @@ def _run_interactive(ctx: typer.Context) -> None:
     workflow = menu[choice]
 
     config = load_config(ctx.obj["config_path"], ctx.obj["globals"])
+    _configure_preprocessing(config)
     config = workflow.configure_interactive(config)
     _dispatch(workflow.command, config)
+
+
+def _configure_preprocessing(config: Any) -> None:
+    """Optionally let the user override audio preprocessing before a run."""
+    from . import prompts  # noqa: PLC0415
+
+    if not prompts.ask_bool(
+        "Customize audio preprocessing (normalization / resampler)?", default=False
+    ):
+        return
+    config.preprocess.normalize = prompts.select(
+        "Per-window normalization (hoplite = peak 0.25, none = raw audio):",
+        choices=["hoplite", "none"],
+        default=config.preprocess.normalize,
+    )
+    config.preprocess.resampler = prompts.select(
+        "Resampler (polyphase = Hoplite native, soxr_hq = librosa default):",
+        choices=["polyphase", "soxr_hq"],
+        default=config.preprocess.resampler,
+    )
 
 
 def _dispatch(command: str, config: Any) -> None:
@@ -125,10 +160,13 @@ def identify(
         None, "--context", help="Extra seconds added to each side of the clip for context."
     ),
     seed: int | None = typer.Option(None, "--extract-seed", help="Segment sampling seed."),
+    normalize: str | None = _NORMALIZE_OPT,
+    resampler: str | None = _RESAMPLER_OPT,
 ) -> None:
     """Run Species Identification (Workflow 1)."""
     sweep_on = any(v is not None for v in (threshold_start, threshold_end, threshold_step))
     overrides = {
+        "preprocess": _preprocess_override(normalize, resampler),
         "identify": {
             "input_dir": input,
             "output_dir": output,
@@ -166,9 +204,12 @@ def embed(
     hop: float | None = typer.Option(None, "--hop", help="Hop size (s)."),
     labeled: bool = typer.Option(False, "--labeled", help="Use per-species folder labels."),
     export: str | None = typer.Option(None, "--export", help="none|parquet|npz."),
+    normalize: str | None = _NORMALIZE_OPT,
+    resampler: str | None = _RESAMPLER_OPT,
 ) -> None:
     """Run Embedding Generation (Workflow 2)."""
     overrides = {
+        "preprocess": _preprocess_override(normalize, resampler),
         "embed": {
             "input_dir": input,
             "output_dir": output,
@@ -193,10 +234,13 @@ def benchmark(
     threshold_end: float | None = typer.Option(None, "--threshold-end", help="Sweep end."),
     threshold_step: float | None = typer.Option(None, "--threshold-step", help="Sweep step."),
     aggregate: str | None = typer.Option(None, "--aggregate", help="window|file."),
+    normalize: str | None = _NORMALIZE_OPT,
+    resampler: str | None = _RESAMPLER_OPT,
 ) -> None:
     """Run Benchmark (Workflow 3)."""
     sweep_on = any(v is not None for v in (threshold_start, threshold_end, threshold_step))
     overrides = {
+        "preprocess": _preprocess_override(normalize, resampler),
         "benchmark": {
             "input_dir": input,
             "output_dir": output,
@@ -228,9 +272,12 @@ def threshold(
     ),
     window: float | None = typer.Option(None, "--window", help="Window size (s)."),
     hop: float | None = typer.Option(None, "--hop", help="Hop size (s)."),
+    normalize: str | None = _NORMALIZE_OPT,
+    resampler: str | None = _RESAMPLER_OPT,
 ) -> None:
     """Run Optimal Confidence Threshold Detection (Workflow 4)."""
     overrides = {
+        "preprocess": _preprocess_override(normalize, resampler),
         "optimal_threshold": {
             "input_dir": input,
             "output_dir": output,

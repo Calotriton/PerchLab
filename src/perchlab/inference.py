@@ -64,6 +64,11 @@ class InferenceEngine:
         self.window_s = window_s
         self.hop_s = hop_s
         self.batch_size = max(1, batch_size)
+        # Apply the configured per-window normalization to the model. ``hoplite``
+        # leaves the model's native ``target_peak`` untouched; ``none`` disables
+        # it so raw audio reaches the network (see PreprocessConfig.normalize).
+        if preprocessor.config.normalize == "none":
+            model.set_target_peak(None)
 
     def run_file(self, path: Path) -> Iterator[WindowResult]:
         """Yield :class:`WindowResult` for every window of ``path``.

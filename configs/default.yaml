@@ -19,6 +19,8 @@ preprocess:
   target_sample_rate_hz: 32000
   mono: true
   peak_norm: null
+  normalize: hoplite    # hoplite = per-window peak-norm to 0.25 (canonical) | none = raw audio
+  resampler: polyphase  # polyphase = Hoplite native (scipy) | soxr_hq = librosa default
   min_length_s: 5.0
   chunk_length_s: 600.0
 

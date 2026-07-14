@@ -137,6 +137,24 @@ class PerchModel:
         """Number of output classes."""
         return len(self.class_names)
 
+    def set_target_peak(self, target_peak: float | None) -> None:
+        """Set the model's per-window peak-normalization target.
+
+        Hoplite normalizes each window to ``target_peak`` inside ``embed`` /
+        ``batch_embed``; ``None`` disables it (raw audio reaches the network).
+        No-op for models that do not expose ``target_peak`` (e.g. the test
+        placeholder), which never normalize.
+
+        Args:
+            target_peak: Target peak amplitude, or ``None`` to disable.
+        """
+        if hasattr(self.model, "target_peak"):
+            self.model.target_peak = target_peak
+            _log.info(
+                "Set model peak-normalization target_peak=%s.",
+                "None (disabled)" if target_peak is None else target_peak,
+            )
+
     @classmethod
     def load(cls, config: ModelConfig) -> PerchModel:
         """Load a Perch model described by ``config``.

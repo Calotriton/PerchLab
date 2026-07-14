@@ -13,9 +13,10 @@ from perchlab.audio import discover_audio, parse_filename
 from perchlab.classify import ClassifierRunner, sigmoid, softmax
 from perchlab.config import FilenameConfig, PreprocessConfig, SegmentConfig
 from perchlab.detections import CSV_COLUMNS, Detection
-from perchlab.inference import WindowResult
+from perchlab.inference import InferenceEngine, WindowResult
 from perchlab.io.raven import RAVEN_COLUMNS, read_selection_table, write_selection_table
 from perchlab.io.tables import write_csv
+from perchlab.models import PerchModel
 from perchlab.preprocess import AudioPreprocessor
 from perchlab.segments import extract_segments
 from perchlab.taxonomy import TaxonomyMap
@@ -67,6 +68,70 @@ def test_iter_windows_count(wav_file: Path) -> None:
     # 12 s file, 5 s windows at 5 s hop -> starts at 0, 5 (last_start=7 -> 0,5).
     assert [round(w.start_s) for w in windows] == [0, 5]
     assert all(w.waveform.size == 32_000 * 5 for w in windows)
+
+
+def test_preprocess_config_normalize_resampler() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    cfg = PreprocessConfig()
+    assert cfg.normalize == "hoplite" and cfg.resampler == "polyphase"  # canonical defaults
+    assert PreprocessConfig(normalize="none", resampler="soxr_hq").normalize == "none"
+    with pytest.raises(ValidationError):
+        PreprocessConfig(normalize="bogus")
+
+
+def test_resampler_choice_changes_samples(tmp_path: Path) -> None:
+    # A 24 kHz file so resampling to 32 kHz actually runs.
+    sr = 24_000
+    rng = np.random.default_rng(0)
+    wav = tmp_path / "PIC02_20250530_040000.wav"
+    sf.write(wav, rng.normal(0, 0.1, sr * 6).astype(np.float32), sr)
+
+    def first_window(resampler: str) -> np.ndarray:
+        pre = AudioPreprocessor(PreprocessConfig(resampler=resampler), sample_rate=32_000)
+        return next(iter(pre.iter_windows(wav, window_s=5.0, hop_s=5.0))).waveform
+
+    poly, soxr = first_window("polyphase"), first_window("soxr_hq")
+    # Both yield correct-length 32 kHz float32 windows...
+    assert poly.size == soxr.size == 32_000 * 5
+    assert poly.dtype == soxr.dtype == np.float32
+    # ...but the filter choice genuinely changes the samples.
+    assert not np.allclose(poly, soxr)
+
+
+class _FakeHopliteModel:
+    """Minimal stand-in exposing the ``target_peak`` attribute InferenceEngine sets."""
+
+    sample_rate = 32_000
+    target_peak: float | None = 0.25
+
+
+def _perch_model_around(raw: object) -> PerchModel:
+    return PerchModel(
+        model=raw, name="fake", sample_rate=32_000, window_size_s=5.0, hop_size_s=5.0,
+        embedding_dim=4, logits_key="label", class_names=["a"],
+    )
+
+
+def test_inference_engine_applies_normalize_choice() -> None:
+    # normalize="none" disables the model's peak-normalization.
+    pm = _perch_model_around(_FakeHopliteModel())
+    pre = AudioPreprocessor(PreprocessConfig(normalize="none"), sample_rate=32_000)
+    InferenceEngine(pm, pre, window_s=5.0, hop_s=5.0, batch_size=8)
+    assert pm.model.target_peak is None
+
+    # normalize="hoplite" leaves the model's native target_peak untouched.
+    pm2 = _perch_model_around(_FakeHopliteModel())
+    pre2 = AudioPreprocessor(PreprocessConfig(normalize="hoplite"), sample_rate=32_000)
+    InferenceEngine(pm2, pre2, window_s=5.0, hop_s=5.0, batch_size=8)
+    assert pm2.model.target_peak == 0.25
+
+
+def test_set_target_peak_safe_without_attribute(perch_placeholder: PerchModel) -> None:
+    # The placeholder model has no target_peak; setting it is a harmless no-op.
+    perch_placeholder.set_target_peak(None)
+    assert not hasattr(perch_placeholder.model, "target_peak")
 
 
 def test_sigmoid_bounds() -> None:

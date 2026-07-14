@@ -53,6 +53,19 @@ class PreprocessConfig(BaseModel):
     mono: bool = True
     #: Peak-normalization target amplitude; ``None`` defers to the model default.
     peak_norm: float | None = None
+    #: Per-window peak-normalization applied *by the model* before inference:
+    #: ``hoplite`` keeps Perch Hoplite's native normalization (each 5 s window is
+    #: scaled to ``target_peak = 0.25``); ``none`` feeds raw audio to the model
+    #: (no per-window normalization). Perch V2 is *not* amplitude-invariant, so
+    #: this materially changes confidence scores — ``hoplite`` is the canonical,
+    #: recommended path; ``none`` reproduces a raw pipeline (e.g. a hand-rolled
+    #: ``serving_default`` script). See the README's "Reproducibility" section.
+    normalize: Literal["hoplite", "none"] = "hoplite"
+    #: Resampling filter used to convert audio to the model rate: ``polyphase``
+    #: (``scipy.signal.resample_poly`` via librosa — Perch Hoplite's native
+    #: choice) or ``soxr_hq`` (librosa's default). A minor, secondary effect on
+    #: scores relative to ``normalize``; ``polyphase`` matches Hoplite.
+    resampler: Literal["polyphase", "soxr_hq"] = "polyphase"
     #: Files shorter than one window (in seconds) are padded to this length.
     min_length_s: float = PERCH_WINDOW_S
     #: Read audio in chunks of this many seconds to bound memory on long files.

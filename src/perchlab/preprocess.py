@@ -87,6 +87,30 @@ class AudioPreprocessor:
         self.validate(audio)
         return audio
 
+    def _read_resampled(self, path: Path, offset_s: float, window_s: float) -> np.ndarray:
+        """Read audio at the target sample rate using the configured resampler.
+
+        ``window_s < 0`` reads the whole file. ``polyphase`` delegates to Perch
+        Hoplite's native loader (``scipy.signal.resample_poly`` via librosa);
+        ``soxr_hq`` reads the window and resamples with librosa's soxr filter.
+        """
+        if self.config.resampler == "soxr_hq":
+            import librosa  # noqa: PLC0415
+
+            duration = None if window_s < 0 else window_s
+            audio, _ = librosa.load(
+                str(path),
+                sr=self.sample_rate,
+                offset=max(0.0, offset_s),
+                duration=duration,
+                mono=True,
+                res_type="soxr_hq",
+            )
+            return audio
+        from perch_hoplite import audio_io  # noqa: PLC0415
+
+        return audio_io.load_audio_window(str(path), offset_s, self.sample_rate, window_s)
+
     def load(self, path: Path) -> np.ndarray:
         """Load a full recording as mono/32 kHz/float32.
 
@@ -99,12 +123,9 @@ class AudioPreprocessor:
         Raises:
             AudioError: If the file cannot be read or fails validation.
         """
-        from perch_hoplite import audio_io  # noqa: PLC0415
-
         try:
-            # load_audio_window with window<0 reads the whole file, reducing to
-            # mono and resampling correctly (unlike load_audio for multichannel).
-            audio = audio_io.load_audio_window(str(path), 0.0, self.sample_rate, -1.0)
+            # window<0 reads the whole file, reducing to mono and resampling.
+            audio = self._read_resampled(path, 0.0, -1.0)
         except Exception as exc:
             raise AudioError(f"Could not read {path}: {exc}") from exc
         audio = self._to_contract(audio)
@@ -145,8 +166,6 @@ class AudioPreprocessor:
         Raises:
             AudioError: If the file cannot be read.
         """
-        from perch_hoplite import audio_io  # noqa: PLC0415
-
         duration = self.duration_s(path)
         window_samples = int(round(window_s * self.sample_rate))
         # Ensure at least one window even for very short files.
@@ -155,9 +174,7 @@ class AudioPreprocessor:
 
         for start_s in starts:
             try:
-                chunk = audio_io.load_audio_window(
-                    str(path), start_s, self.sample_rate, window_s
-                )
+                chunk = self._read_resampled(path, start_s, window_s)
             except Exception as exc:
                 raise AudioError(
                     f"Could not read window at {start_s:.1f}s of {path}: {exc}"
