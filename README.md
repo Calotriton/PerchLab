@@ -157,6 +157,12 @@ uv pip install -e ".[onnx]"     # ONNX runtime — light, good default (CPU or m
 # add ,dev for the test/lint toolchain, e.g. ".[onnx,dev]"
 ```
 
+> **Running the guided notebooks?** Pick `tf` or `gpu`, not `onnx`. The notebooks in
+> `notebooks/` call the Perch SavedModel through TensorFlow directly, and the `onnx`
+> extra does not install TensorFlow — the notebook's import cell fails with
+> `ModuleNotFoundError: No module named 'tensorflow'`. The CLI is unaffected and works
+> on any backend.
+
 > **If you use `uv sync` instead, pass your extras.** The commands above use
 > `uv pip install`, which *adds* to the environment. `uv sync` makes the
 > environment **exactly** match the lockfile, so a bare `uv sync` **uninstalls
@@ -623,7 +629,7 @@ src/perchlab/
   benchmark/        Labelled-dataset eval: dataset/evaluate/metrics/sweep/plots/report.
   threshold/        Optimal-threshold estimation: dataset/collect/stats/plots/report.
 configs/default.yaml  Documented default configuration.
-notebooks/            Example notebooks mirroring the workflows.
+notebooks/            Example notebooks mirroring the workflows (need the tf/gpu extra).
 tests/                pytest suite (offline PlaceholderModel + real-model marker).
 ```
 
